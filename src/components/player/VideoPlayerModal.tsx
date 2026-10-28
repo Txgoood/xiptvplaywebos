@@ -98,7 +98,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const refreshMediaTracks = useCallback(() => {
     const video = videoRef.current;
     const hls = hlsRef.current;
-    if (hls && isHlsActive) {
+    if (hls) {
       setTrackSource('hls');
       setAvailableAudioTracks(hls.audioTracks.map((t, id) => ({
         id, name: t.name || t.lang || `Ses ${id + 1}`,
@@ -123,11 +123,11 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
       ? Array.from(video.textTracks).filter(t => t.kind === 'subtitles' || t.kind === 'captions')
           .map((t, id) => ({ id, name: t.label || t.language || `Altyazı ${id + 1}` }))
       : []);
-  }, [isHlsActive]);
+  }, []);
 
   const selectAudioTrack = (id: number) => {
     const hls = hlsRef.current;
-    if (hls && isHlsActive) hls.audioTrack = id;
+    if (hls) hls.audioTrack = id;
     else {
       const tracks = (videoRef.current as (HTMLVideoElement & {
         audioTracks?: { length: number; [index: number]: { enabled?: boolean } };
@@ -140,7 +140,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
 
   const selectSubtitleTrack = (id: number | null) => {
     const hls = hlsRef.current;
-    if (hls && isHlsActive) {
+    if (hls) {
       hls.subtitleDisplay = id !== null;
       hls.subtitleTrack = id === null ? -1 : id;
     } else if (videoRef.current) {
