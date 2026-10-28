@@ -88,7 +88,68 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [brightness, setBrightness] = useState(1.0); // 0.2 to 1.5
   const [quality, setQuality] = useState('Otomatik');
-  const [audioTrack, setAudioTrack] = useState('Türkçe (5.1 Dolby)');
+  const [audioTrack, setAudioTrack] = useState('Varsayılan');
+  const [availableAudioTracks, setAvailableAudioTracks] = useState<{ id: number; name: string }[]>([]);
+  const [availableSubtitleTracks, setAvailableSubtitleTracks] = useState<{ id: number; name: string }[]>([]);
+  const [trackSource, setTrackSource] = useState<'hls' | 'native' | 'none'>('none');
+
+  // webOS native HTML5 and HLS expose different track lists.
+  // Never claim a language exists unless the active playback engine reports it.
+  const refreshMediaTracks = useCallback(() => {
+    const video = videoRef.current;
+    const hls = hlsRef.current;
+    if (hls && isHlsActive) {
+      setTrackSource('hls');
+      setAvailableAudioTracks(hls.audioTracks.map((t, id) => ({
+        id, name: t.name || t.lang || `Ses ${id + 1}`,
+      })));
+      setAvailableSubtitleTracks(hls.subtitleTracks.map((t, id) => ({
+        id, name: t.name || t.lang || `Altyazı ${id + 1}`,
+      })));
+      setAudioTrack(hls.audioTrack >= 0 && hls.audioTracks[hls.audioTrack]
+        ? (hls.audioTracks[hls.audioTrack].name || hls.audioTracks[hls.audioTrack].lang || `Ses ${hls.audioTrack + 1}`)
+        : 'Varsayılan');
+      return;
+    }
+    const nativeAudio = video ? (video as HTMLVideoElement & {
+      audioTracks?: { length: number; [index: number]: { label?: string; language?: string; enabled?: boolean } };
+    }).audioTracks : undefined;
+    setTrackSource(video ? 'native' : 'none');
+    setAvailableAudioTracks(nativeAudio
+      ? Array.from({ length: nativeAudio.length }, (_, id) => ({
+          id, name: nativeAudio[id].label || nativeAudio[id].language || `Ses ${id + 1}`,
+        })) : []);
+    setAvailableSubtitleTracks(video
+      ? Array.from(video.textTracks).filter(t => t.kind === 'subtitles' || t.kind === 'captions')
+          .map((t, id) => ({ id, name: t.label || t.language || `Altyazı ${id + 1}` }))
+      : []);
+  }, [isHlsActive]);
+
+  const selectAudioTrack = (id: number) => {
+    const hls = hlsRef.current;
+    if (hls && isHlsActive) hls.audioTrack = id;
+    else {
+      const tracks = (videoRef.current as (HTMLVideoElement & {
+        audioTracks?: { length: number; [index: number]: { enabled?: boolean } };
+      }) | null)?.audioTracks;
+      if (!tracks || id >= tracks.length) return;
+      for (let i = 0; i < tracks.length; i++) tracks[i].enabled = i === id;
+    }
+    setAudioTrack(availableAudioTracks.find(t => t.id === id)?.name || 'Varsayılan');
+  };
+
+  const selectSubtitleTrack = (id: number | null) => {
+    const hls = hlsRef.current;
+    if (hls && isHlsActive) {
+      hls.subtitleDisplay = id !== null;
+      hls.subtitleTrack = id === null ? -1 : id;
+    } else if (videoRef.current) {
+      const tracks = Array.from(videoRef.current.textTracks)
+        .filter(t => t.kind === 'subtitles' || t.kind === 'captions');
+      tracks.forEach((track, index) => { track.mode = id === index ? 'showing' : 'disabled'; });
+    }
+    setSubtitleTrack(id === null ? 'Kapalı' : availableSubtitleTracks.find(t => t.id === id)?.name || 'Kapalı');
+  };
 
   // Subtitle State (.srt / .vtt)
   const [subtitleTrack, setSubtitleTrack] = useState('Kapalı');
@@ -329,6 +390,11 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
         hlsRef.current = null;
       }
       setIsHlsActive(false);
+      setAvailableAudioTracks([]);
+      setAvailableSubtitleTracks([]);
+      setTrackSource('none');
+      setAudioTrack('Varsayılan');
+      setSubtitleTrack('Kapalı');
     }
   }, [isOpen, media?.id, rawUrl]);
 
@@ -452,8 +518,11 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
           hls.loadSource(currentUrl);
         });
 
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => setTimeout(refreshMediaTracks, 0));
+        hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => setTimeout(refreshMediaTracks, 0));
         hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
           setIsHlsActive(true);
+          setTimeout(refreshMediaTracks, 0);
           setPlaybackError(null);
           if (data.levels && data.levels.length > 0) {
             const lvls = data.levels.map((l, idx) => ({
@@ -843,6 +912,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
           key={`${media.id}-${fallbackStage}`}
           poster={media.poster}
           onTimeUpdate={handleTimeUpdate}
+          onLoadedMetadata={() => setTimeout(refreshMediaTracks, 0)}
           onEnded={() => setIsPlaying(false)}
           onError={(e) => {
             if (hlsRef.current || !e.currentTarget.currentSrc) return;
@@ -1279,37 +1349,31 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               </div>
 
               <div className="flex flex-col gap-1">
-                {['Kapalı', 'Türkçe', 'English', ...(customSubtitleName ? [customSubtitleName] : [])].map(
-                  (s) => (
-                    <button
-                      key={s}
-                      onClick={() => setSubtitleTrack(s)}
-                      className={`px-2.5 py-1.5 rounded text-left text-[11px] flex items-center justify-between cursor-pointer transition-colors ${
-                        subtitleTrack === s ? 'bg-[#00f0ff] text-[#00363a] font-bold' : 'bg-[#201f21] hover:bg-[#2a2a2c]'
-                      }`}
-                    >
-                      <span className="truncate">{s}</span>
-                      {subtitleTrack === s && <Check className="w-3.5 h-3.5 shrink-0" />}
-                    </button>
-                  )
+                <button onClick={() => selectSubtitleTrack(null)} className="px-2.5 py-1.5 rounded text-left text-[11px] bg-[#201f21]">Kapalı</button>
+                {availableSubtitleTracks.map(t => (
+                  <button key={t.id} onClick={() => selectSubtitleTrack(t.id)}
+                    className={`px-2.5 py-1.5 rounded text-left text-[11px] ${subtitleTrack === t.name ? 'bg-[#0566d9] text-white' : 'bg-[#201f21]'}`}>
+                    {t.name}
+                  </button>
+                ))}
+                {customSubtitleName && (
+                  <button onClick={() => setSubtitleTrack(customSubtitleName)} className="px-2.5 py-1.5 rounded text-left text-[11px] bg-[#201f21]">{customSubtitleName}</button>
                 )}
+                {availableSubtitleTracks.length === 0 && !customSubtitleName && <span className="text-[10px] text-[#b9cacb]">Oynatıcı altyazı kanalı bildirmedi.</span>}
               </div>
             </div>
 
             {/* Audio Track */}            <div className="flex flex-col gap-1 pt-1 border-t border-white/5">
               <span className="text-[10px] text-[#b9cacb] uppercase font-bold">Ses İzi</span>
               <div className="flex flex-col gap-1">
-                {['Türkçe (5.1 Dolby)', 'English (Original Atmos)', 'Yayın Varsayılanı'].map((a) => (
-                  <button
-                    key={a}
-                    onClick={() => setAudioTrack(a)}
-                    className={`px-2.5 py-1.5 rounded text-left text-[11px] cursor-pointer transition-colors ${
-                      audioTrack === a ? 'bg-[#0566d9] text-white font-bold' : 'bg-[#201f21] hover:bg-[#2a2a2c]'
-                    }`}
-                  >
-                    {a}
+                {availableAudioTracks.map(t => (
+                  <button key={t.id} onClick={() => selectAudioTrack(t.id)}
+                    className={`px-2.5 py-1.5 rounded text-left text-[11px] ${audioTrack === t.name ? 'bg-[#0566d9] text-white' : 'bg-[#201f21]'}`}>
+                    {t.name}
                   </button>
                 ))}
+                {availableAudioTracks.length === 0 && <span className="text-[10px] text-[#b9cacb]">Oynatıcı ses kanalı bildirmedi (varsayılan ses kullanılıyor).</span>}
+                <button type="button" onClick={refreshMediaTracks} className="text-left text-[10px] text-[#00f0ff]">Kanalları yenile ({trackSource})</button>
               </div>
             </div>
 
