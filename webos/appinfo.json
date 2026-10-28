@@ -1,0 +1,9 @@
+{
+  "id": "com.xiptvplay.webostest",
+  "version": "0.1.0",
+  "vendor": "XIPTV Play",
+  "type": "web",
+  "main": "index.html",
+  "title": "XIPTV Play Test",
+  "resolution": "1920x1080"
+}
